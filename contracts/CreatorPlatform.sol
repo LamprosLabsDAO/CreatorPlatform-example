@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract CreatorToken is ERC20 {
-    constructor(uint256 initialSupply) ERC20("CreatorToken", "CT") {
-        _mint(msg.sender, initialSupply);
-    }
-}
-
-contract CreatorPlatform is ERC721 {
-    CreatorToken public token;
-
+contract CreatorPlatform is ERC721, ReentrancyGuard {
     struct Content {
-        address creator;
+        address payable creator;
         string contentURI;
         uint256 tipAmount;
     }
@@ -45,47 +37,40 @@ contract CreatorPlatform is ERC721 {
         address indexed subscriber
     );
 
-    constructor(address _tokenAddress) ERC721("CreatorContent", "CC") {
-        token = CreatorToken(_tokenAddress);
-    }
+    constructor() ERC721("CreatorContent", "CC") {}
 
     function createContent(string memory _contentURI) external {
         contentCount++;
-        contents[contentCount] = Content(msg.sender, _contentURI, 0);
+        contents[contentCount] = Content(payable(msg.sender), _contentURI, 0);
         _safeMint(msg.sender, contentCount);
         emit ContentCreated(contentCount, msg.sender, _contentURI);
     }
 
-    function tipContent(uint256 _contentId, uint256 _amount) external {
+    function tipContent(uint256 _contentId) external payable {
         require(_contentId <= contentCount, "Content does not exist");
         Content storage content = contents[_contentId];
-        require(_amount > 0, "Tip amount must be greater than 0");
+        require(msg.value > 0, "Tip amount must be greater than 0");
 
-        content.tipAmount += _amount;
-        require(
-            token.transferFrom(msg.sender, content.creator, _amount),
-            "Token transfer failed"
-        );
+        content.tipAmount += msg.value;
+        content.creator.transfer(msg.value);
 
-        emit ContentTipped(_contentId, msg.sender, _amount);
+        emit ContentTipped(_contentId, msg.sender, msg.value);
     }
 
     function setSubscriptionFee(uint256 _fee) external {
         creators[msg.sender].subscriptionFee = _fee;
     }
 
-    function subscribe(address _creator) external {
+    function subscribe(address _creator) external payable {
         Creator storage creator = creators[_creator];
         require(!creator.subscribers[msg.sender], "Already subscribed");
 
         uint256 fee = creator.subscriptionFee;
-        require(
-            token.transferFrom(msg.sender, _creator, fee),
-            "Token transfer failed"
-        );
+        require(msg.value >= fee, "Insufficient subscription fee");
 
         creator.subscribers[msg.sender] = true;
         creator.subscriberCount++;
+        payable(_creator).transfer(msg.value);
 
         emit CreatorSubscribed(_creator, msg.sender);
     }
@@ -103,13 +88,16 @@ contract CreatorPlatform is ERC721 {
         return creators[_creator].subscriberCount;
     }
 
-    // function withdrawTips(uint256 _contentId) external nonReentrant {
-    //     require(_contentId <= contentCount, "Content does not exist");
-    //     Content storage content = contents[_contentId];
-    //     require(msg.sender == content.creator, "Only the creator can withdraw tips");
+    function withdrawTips(uint256 _contentId) external nonReentrant {
+        require(_contentId <= contentCount, "Content does not exist");
+        Content storage content = contents[_contentId];
+        require(
+            msg.sender == content.creator,
+            "Only the creator can withdraw tips"
+        );
 
-    //     uint256 amount = content.tipAmount;
-    //     content.tipAmount = 0;
-    //     require(token.transfer(msg.sender, amount), "Token transfer failed");
-    // }
+        uint256 amount = content.tipAmount;
+        content.tipAmount = 0;
+        content.creator.transfer(amount);
+    }
 }
